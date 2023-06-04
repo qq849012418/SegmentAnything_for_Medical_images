@@ -10,6 +10,7 @@ from segment_anything import sam_model_registry, SamPredictor
 import argparse, shutil
 from skimage.measure import label,regionprops
 import time
+import SimpleITK as sitk
 
 #----functions------------------------
 def nifti2RGB(nifti_data, show=False):
@@ -27,15 +28,15 @@ def nifti2RGB(nifti_data, show=False):
     opencv_image = cv2.cvtColor(uint8_image, cv2.COLOR_GRAY2BGR)
 
     if show:
-        cv2_imshow(opencv_image) # for Google Colab
+        cv2.imshow(opencv_image) # for Google Colab
 
     return opencv_image  
 
 
 def segmentAnything(img,input_box):
-    sam_checkpoint = "sam_vit_h_4b8939.pth"
+    sam_checkpoint = "D:\\Keenster\\Projects\\SAMModelPath\\sam_vit_h_4b8939.pth"
     model_type = "vit_h"
-    device = "cpu"
+    device = "cuda"
     sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
     sam.to(device=device)
     predictor = SamPredictor(sam)
@@ -59,12 +60,14 @@ def time_convert(sec):
 
 root_dir = pathlib.Path.cwd()
 recon_dir = os.path.join(root_dir, "Data", "Segment_Anything")
+muscle_name_list=["_psoas_left","_psoas_right","_erector_spinae_left","_erector_spinae_right"]
+testindex=3
 if os.path.exists(recon_dir):
     shutil.rmtree(recon_dir)
 os.makedirs(recon_dir)
     
-input_dir = os.path.join(root_dir, "Data", "CT")
-mask_dir = os.path.join(root_dir, "Data", "RTS")
+input_dir = os.path.join(root_dir, "Data", "Study", "img")
+mask_dir = os.path.join(root_dir, "Data", "Study", "msk")
 image_names = sorted([ele for ele in os.listdir(input_dir) if ele.endswith(".nii.gz")])
 image_paths = [os.path.join(input_dir, ele) for ele in image_names]
 for ind, cur_img_path in enumerate(image_paths):
@@ -76,8 +79,9 @@ for ind, cur_img_path in enumerate(image_paths):
     print('-----------------------------------------')
     image = nib.load(cur_img_path).get_fdata().astype(np.float32)
     
-    mask_name = file_name.split('_',1)[1]
-    mask_name = os.path.join('RTS_' + mask_name + '.nii.gz')
+    # mask_name = file_name.split('_',1)[1]
+
+    mask_name = os.path.join(file_name + muscle_name_list[testindex]+'.nii.gz')
     ref_mask = os.path.join(mask_dir,mask_name)
     ref_mask = nib.load(ref_mask).get_fdata().astype(np.float32)
     points = []
@@ -97,13 +101,30 @@ for ind, cur_img_path in enumerate(image_paths):
                 out = segmentAnything(img,input_box)
                 pred = (out * 1) | (pred) 
                 output[:,:,i] = pred
-    mask_name = file_name.split('_',1)[1]
-    new_name = os.path.join('SAMR_' + mask_name + '.nii.gz')            
+    # mask_name = file_name.split('_',1)[1]
+    new_name = os.path.join(file_name + muscle_name_list[testindex]+'.nii.gz')
     mask_nifty = nib.Nifti1Image(output, affine=np.eye(4))
     nib.save(mask_nifty, os.path.join(recon_dir,new_name))
     end_time = time.time()
     time_lapsed = end_time - start_time
     time_convert(time_lapsed)
+
+    #postprocessing
+    # 加载原始图像和参考图像
+    input_image = sitk.ReadImage(os.path.join(recon_dir,new_name))
+    ref_image = sitk.ReadImage(os.path.join(mask_dir,mask_name))
+
+    # 获取参考图像的空间信息和spacing
+    ref_origin = ref_image.GetOrigin()
+    ref_spacing = ref_image.GetSpacing()
+    ref_direction = ref_image.GetDirection()
+
+    input_image.SetOrigin(ref_origin)
+    input_image.SetSpacing(ref_spacing)
+    input_image.SetDirection(ref_direction)
+
+    # 将结果保存为新的NIfTI文件
+    sitk.WriteImage(input_image, os.path.join(recon_dir,new_name))
                 
             
         
